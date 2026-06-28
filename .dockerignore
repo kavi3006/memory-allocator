@@ -1,0 +1,5 @@
+.git
+.DS_Store
+tests/test_*
+tests/my.out
+tests/expected.out

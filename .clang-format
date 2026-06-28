@@ -1,0 +1,5 @@
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 2
+PointerAlignment: Middle
+BreakBeforeBraces: Attach
