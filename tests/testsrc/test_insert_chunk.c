@@ -1,7 +1,8 @@
 #include <unistd.h>
+#include <stdio.h>
 
 #include "testing.h"
-#include "malloc.h"
+#include "my_malloc.h"
 
 int main() {
   initialize_test(__FILE__);
