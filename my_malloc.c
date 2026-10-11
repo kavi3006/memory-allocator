@@ -10,7 +10,7 @@
 #include "my_malloc.h"
 #include "printing.h"
 
-/* 
+/*
  * Due to the way assert() prints error messges we use out own assert function
  * for deteminism when testing assertions
  */
@@ -76,7 +76,8 @@ static inline void deallocate_object(void * p);
 // Helper functions for allocating a block
 static inline header * allocate_object(size_t raw_size);
 
-// Helper functions for verifying that the data structures are structurally valid
+// Helper functions for verifying that the data structures are structurally
+// valid
 static inline header * detect_cycles();
 static inline header * verify_pointers();
 static inline bool verify_freelist();
@@ -107,7 +108,7 @@ static inline header * get_header_from_offset(void * ptr, ptrdiff_t off) {
  * @return header to the right of h
  */
 header * get_right_header(header * h) {
-  return get_header_from_offset(h, h->size);
+  return get_header_from_offset(h, (ptrdiff_t)h->size);
 }
 
 /**
@@ -118,7 +119,7 @@ header * get_right_header(header * h) {
  * @return header to the left of h
  */
 inline static header * get_left_header(header * h) {
-  return get_header_from_offset(h, -h->left_size);
+  return get_header_from_offset(h, -(ptrdiff_t)h->left_size);
 }
 
 /**
@@ -159,7 +160,7 @@ inline static void insert_fenceposts(void * raw_mem, size_t size) {
   initialize_fencepost(leftFencePost, ALLOC_HEADER_SIZE);
 
   header * rightFencePost =
-      get_header_from_offset(mem, size - ALLOC_HEADER_SIZE);
+      get_header_from_offset(mem, (ptrdiff_t)(size - ALLOC_HEADER_SIZE));
   initialize_fencepost(rightFencePost, size - 2 * ALLOC_HEADER_SIZE);
 }
 
@@ -173,7 +174,7 @@ inline static void insert_fenceposts(void * raw_mem, size_t size) {
  * first fencepost)
  */
 static header * allocate_chunk(size_t size) {
-  void * mem = sbrk(size);
+  void * mem = sbrk((intptr_t)size);
   // syscall fails
   if (mem == (void *)-1) {
     return NULL;
@@ -192,14 +193,16 @@ static header * allocate_chunk(size_t size) {
  * @param num the floating point value to ceil
  * @return the smallest integer >= num
  *
- * TODO: Implement without using the math.h ceil() function.
+ * Implement without using the math.h ceil() function.
  * Hint: cast to int (truncates toward zero), then check if the truncated
  * value is less than num.
  */
 inline static int my_ceil(float num) {
-  // TODO
-  (void)num;
-  return 0;
+  int truncated = (int)num;
+  if ((float)truncated < num) {
+    return truncated + 1;
+  }
+  return truncated;
 }
 
 /**
@@ -209,7 +212,7 @@ inline static int my_ceil(float num) {
  * @param raw_size number of user bytes requested
  * @return total block size (aligned to 8 bytes, at least sizeof(header))
  *
- * TODO: Implement this function.
+ * Implement this function.
  * Steps:
  *   1. Add ALLOC_HEADER_SIZE to raw_size to account for the header metadata.
  *   2. Round the result up to the nearest multiple of 8 using my_ceil().
@@ -217,9 +220,20 @@ inline static int my_ceil(float num) {
  *      must always have room for the next/prev free-list pointers.
  */
 inline static unsigned calculate_actual_size(size_t raw_size) {
-  // TODO
-  (void)raw_size;
-  return 0;
+  // 1. Add ALLOC_HEADER_SIZE to raw_size to account for the header metadata.
+  size_t total = raw_size + ALLOC_HEADER_SIZE;
+
+  // 2. Round the result up to the nearest multiple of 8 using my_ceil().
+  float divided = (float)total / 8.0f;
+  int rounded = my_ceil(divided);
+  total = (size_t)rounded * 8;
+
+  // 3. Return the larger of the rounded size and sizeof(header) — freed blocks
+  //      must always have room for the next/prev free-list pointers.
+  if (total < sizeof(header)) {
+    return sizeof(header);
+  }
+  return total;
 }
 
 /**
@@ -233,9 +247,7 @@ inline static unsigned calculate_actual_size(size_t raw_size) {
  * struct. The header begins ALLOC_HEADER_SIZE bytes *before* p in memory.
  */
 static inline header * ptr_to_header(void * p) {
-  // TODO
-  (void)p;
-  return NULL;
+  return (header *)((char *)p - ALLOC_HEADER_SIZE);
 }
 
 /**
@@ -244,7 +256,7 @@ static inline header * ptr_to_header(void * p) {
  * @param raw_size number of bytes the user needs
  * @return pointer to the data[] field of the allocated block, or NULL
  *
- * TODO: Implement the core malloc algorithm.
+ * Implement the core malloc algorithm.
  *
  * Steps:
  *   1. Return NULL for a zero or negative request.
@@ -263,8 +275,8 @@ static inline header * ptr_to_header(void * p) {
  *             Treat as exact fit (fragmentation is unavoidable here).
  *        c. Splittable (hdr->size - requestSize >= sizeof(header)):
  *             Carve requestSize bytes off the RIGHT end of hdr.
- *             Update hdr->size and the new block's size / left_size / allocated.
- *             Update the block to hdr's right so its left_size reflects hdr's
+ *             Update hdr->size and the new block's size / left_size /
+ * allocated. Update the block to hdr's right so its left_size reflects hdr's
  *             new (smaller) size.
  *             Move hdr to the free list matching its new size class.
  *             Return a pointer to the new block's data[].
@@ -298,9 +310,222 @@ static inline header * ptr_to_header(void * p) {
  *   get_left_header(), insert_os_chunk().
  */
 static inline header * allocate_object(size_t raw_size) {
-  // TODO
-  (void)raw_size;
-  return NULL;
+  // 1. Return NULL for a zero request.
+  if (raw_size == 0) {
+    return NULL;
+  }
+
+  // 2. Compute the aligned block size with calculate_actual_size().
+  size_t requestSize = calculate_actual_size(raw_size);
+
+  // 3. Determine the starting free-list index:
+  //    index = (requestSize / 8) - 1
+  //    Clamp to [0, N_LISTS - 1].
+  int index = (int)(requestSize / 8) - 1;
+  if (index < 0) {
+    index = 0;
+  }
+  if (index >= N_LISTS) {
+    index = N_LISTS - 1;
+  }
+
+  // 4. Walk free lists from `index` up to N_LISTS - 1:
+  for (int i = index; i < N_LISTS; i++) {
+    header * freelist = &freelistSentinels[i];
+    for (header * hdr = freelist->next; hdr != freelist; hdr = hdr->next) {
+      // a. Exact fit (hdr->size == requestSize):
+      if (hdr->size == requestSize) {
+        // Mark ALLOCATED
+        hdr->allocated = ALLOCATED;
+        // Unlink hdr from free list
+        hdr->prev->next = hdr->next;
+        hdr->next->prev = hdr->prev;
+        return (header *)hdr->data;
+      }
+
+      // b. Too-small remainder (hdr->size - requestSize < sizeof(header)):
+      if (hdr->size < requestSize) {
+        continue;
+      }
+      if (hdr->size - requestSize < sizeof(header)) {
+        // Treat as exact fit (fragmentation is unavoidable here)
+        hdr->allocated = ALLOCATED;
+        // Unlink hdr from free list
+        hdr->prev->next = hdr->next;
+        hdr->next->prev = hdr->prev;
+        return (header *)hdr->data;
+      }
+
+      // c. Splittable (hdr->size - requestSize >= sizeof(header)):
+      if (hdr->size - requestSize >= sizeof(header)) {
+        // Carve requestSize bytes off the RIGHT end of hdr.
+        // hdr remains as the free block (reduced in size)
+        // We'll allocate from the right end
+
+        size_t remainingSize = hdr->size - requestSize;
+
+        // Update hdr (the free block) to shrink its size
+        hdr->size = remainingSize;
+
+        // Create header for the allocated block (to be returned)
+        header * allocHdr =
+            get_header_from_offset(hdr, (ptrdiff_t)remainingSize);
+        allocHdr->size = requestSize;
+        allocHdr->allocated = ALLOCATED;
+        allocHdr->left_size =
+            remainingSize; // Left neighbor is the remaining free block
+
+        // Update the block to the right of the allocated block
+        header * rightOfAlloc = get_right_header(allocHdr);
+        rightOfAlloc->left_size = allocHdr->size;
+
+        // Unlink hdr from its current free list
+        hdr->prev->next = hdr->next;
+        hdr->next->prev = hdr->prev;
+
+        // Insert hdr into the free list matching its new size
+        int newIndex = (int)((hdr->size - ALLOC_HEADER_SIZE) / 8) - 1;
+        if (newIndex < 0) {
+          newIndex = 0;
+        }
+        if (newIndex >= N_LISTS) {
+          newIndex = N_LISTS - 1;
+        }
+
+        header * targetFreelist = &freelistSentinels[newIndex];
+        hdr->next = targetFreelist->next;
+        hdr->prev = targetFreelist;
+        targetFreelist->next->prev = hdr;
+        targetFreelist->next = hdr;
+
+        return (header *)allocHdr->data;
+      }
+    }
+  }
+
+  // 5. No block found — request a new chunk:
+  header * newBlock = allocate_chunk(ARENA_SIZE);
+  if (newBlock == NULL) {
+    errno = ENOMEM;
+    return NULL;
+  }
+
+  header * newFencePost =
+      get_header_from_offset(newBlock, -(ptrdiff_t)ALLOC_HEADER_SIZE);
+
+  // Check if the new chunk is ADJACENT to the old one
+  header * rightOfLastFencePost = get_right_header(lastFencePost);
+  if (rightOfLastFencePost == newFencePost) {
+    // Adjacent case - the chunks are contiguous in memory
+
+    // Get the block to the left of lastFencePost (the last block in the old
+    // chunk)
+    header * leftBlock = get_left_header(lastFencePost);
+
+    // Sub-case A — left neighbor of lastFencePost is ALLOCATED:
+    if (leftBlock->allocated == ALLOCATED) {
+      // Reuse the old right fencepost as the start of the combined free block.
+      header * block = lastFencePost;
+      block->size = 2 * ALLOC_HEADER_SIZE + newBlock->size;
+      block->left_size = leftBlock->size;
+      block->allocated = UNALLOCATED;
+
+      header * rightFencePostOfNewBlock =
+          get_header_from_offset(newBlock, (ptrdiff_t)newBlock->size);
+      rightFencePostOfNewBlock->left_size = block->size;
+
+      // Insert block into the appropriate free list
+      int blockIndex = (int)((block->size - ALLOC_HEADER_SIZE) / 8) - 1;
+      if (blockIndex < 0) {
+        blockIndex = 0;
+      }
+      if (blockIndex >= N_LISTS) {
+        blockIndex = N_LISTS - 1;
+      }
+
+      header * targetFreelist = &freelistSentinels[blockIndex];
+      block->next = targetFreelist->next;
+      block->prev = targetFreelist;
+      targetFreelist->next->prev = block;
+      targetFreelist->next = block;
+
+      // Update lastFencePost to be the right fencepost of the new chunk
+      lastFencePost = rightFencePostOfNewBlock;
+
+      // Retry by calling allocate_object(raw_size)
+      return allocate_object(raw_size);
+    }
+    // Sub-case B — left neighbor of lastFencePost is UNALLOCATED:
+    else {
+      // Can coalesce with the left block
+      header * block = leftBlock; // Start with the left block
+
+      // Extend block to absorb: the right fencepost of old chunk +
+      //                         the left fencepost of new chunk +
+      //                         the usable memory of new chunk
+      block->size += ALLOC_HEADER_SIZE + ALLOC_HEADER_SIZE + newBlock->size;
+
+      // Update the block to the right of the new combined block
+      // This is the right fencepost of the new chunk
+      header * rightFencePostOfNewBlock =
+          get_header_from_offset(newBlock, (ptrdiff_t)newBlock->size);
+      header * blockToTheRight = get_right_header(rightFencePostOfNewBlock);
+      blockToTheRight->left_size = block->size;
+
+      // If block needs to move to a different free list, handle that
+      // Unlink block from its current list
+      block->prev->next = block->next;
+      block->next->prev = block->prev;
+
+      // Insert into the correct list based on new size
+      int newIndex = (int)((block->size - ALLOC_HEADER_SIZE) / 8) - 1;
+      if (newIndex < 0) {
+        newIndex = 0;
+      }
+      if (newIndex >= N_LISTS) {
+        newIndex = N_LISTS - 1;
+      }
+
+      header * targetFreelist = &freelistSentinels[newIndex];
+      block->next = targetFreelist->next;
+      block->prev = targetFreelist;
+      targetFreelist->next->prev = block;
+      targetFreelist->next = block;
+
+      // Update lastFencePost to be the right fencepost of the new chunk
+      lastFencePost = rightFencePostOfNewBlock;
+
+      // Retry by calling allocate_object(raw_size)
+      return allocate_object(raw_size);
+    }
+  }
+
+  // If NOT adjacent:
+  // Register the new chunk: insert_os_chunk(newFencePost).
+  insert_os_chunk(newFencePost);
+  // Add newBlock to its appropriate free list.
+  header * block = newBlock;
+
+  // Insert into the appropriate free list based on its size
+  int insertIndex = (int)((block->size - ALLOC_HEADER_SIZE) / 8) - 1;
+  if (insertIndex < 0) {
+    insertIndex = 0;
+  }
+  if (insertIndex >= N_LISTS) {
+    insertIndex = N_LISTS - 1;
+  }
+
+  header * targetFreelist = &freelistSentinels[insertIndex];
+  block->next = targetFreelist->next;
+  block->prev = targetFreelist;
+  targetFreelist->next->prev = block;
+  targetFreelist->next = block;
+
+  // Update lastFencePost to be the right fencepost of this new chunk
+  lastFencePost = get_header_from_offset(block, (ptrdiff_t)block->size);
+
+  // Retry by calling allocate_object(raw_size)
+  return allocate_object(raw_size);
 }
 
 /**
@@ -308,7 +533,7 @@ static inline header * allocate_object(size_t raw_size) {
  *
  * @param p pointer returned by a prior call to my_malloc (may be NULL)
  *
- * TODO: Implement the core free algorithm.
+ * Implement the core free algorithm.
  *
  * Steps:
  *   1. If p is NULL, return immediately (free(NULL) is a no-op).
@@ -331,18 +556,17 @@ static inline header * allocate_object(size_t raw_size) {
  *
  *      Case A — both neighbors UNALLOCATED:
  *        leftBlock->size += currBlock->size + rightBlock->size
- *        Update the block to the right of rightBlock: its left_size = leftBlock->size
- *        Unlink rightBlock from its free list.
- *        If leftBlock's new size class differs from origList, unlink leftBlock
- *        from its current list (it will be re-inserted in step 7).
- *        Set currBlock = leftBlock.
+ *        Update the block to the right of rightBlock: its left_size =
+ * leftBlock->size Unlink rightBlock from its free list. If leftBlock's new size
+ * class differs from origList, unlink leftBlock from its current list (it will
+ * be re-inserted in step 7). Set currBlock = leftBlock.
  *
  *      Case B — only right neighbor UNALLOCATED:
  *        currBlock->size += rightBlock->size
  *        Inherit rightBlock's list links (splice currBlock in place of
  *        rightBlock so the list stays intact).
- *        Update the block to the right of rightBlock: its left_size = currBlock->size
- *        If the size class changed, unlink and re-insert currBlock.
+ *        Update the block to the right of rightBlock: its left_size =
+ * currBlock->size If the size class changed, unlink and re-insert currBlock.
  *
  *      Case C — only left neighbor UNALLOCATED:
  *        leftBlock->size += currBlock->size
@@ -362,8 +586,105 @@ static inline header * allocate_object(size_t raw_size) {
  *   ptr_to_header(), get_left_header(), get_right_header().
  */
 static inline void deallocate_object(void * p) {
-  // TODO
-  (void)p;
+  // 1. If p is NULL, return immediately (free(NULL) is a no-op).
+  if (p == NULL) {
+    return;
+  }
+
+  // 2. Recover the header: currBlock = ptr_to_header(p).
+  header * currBlock = ptr_to_header(p);
+
+  // 3. Double-free check: if currBlock->allocated == UNALLOCATED, print
+  //      "Double Free Detected\n" and assert(false).
+  if (currBlock->allocated == UNALLOCATED) {
+    fprintf(stderr, "Double Free Detected\n");
+    assert(false);
+  }
+
+  // 4. Mark currBlock UNALLOCATED.
+  currBlock->allocated = UNALLOCATED;
+
+  // 5. Get neighbors:
+  //        leftBlock  = get_left_header(currBlock)
+  //        rightBlock = get_right_header(currBlock)
+  header * leftBlock = get_left_header(currBlock);
+  header * rightBlock = get_right_header(currBlock);
+
+  // 6. Coalesce according to neighbor states:
+
+  // Case A — both neighbors UNALLOCATED:
+  if (leftBlock->allocated == UNALLOCATED &&
+      rightBlock->allocated == UNALLOCATED) {
+    // [Note: This assumes leftBlock and rightBlock are actual blocks, not
+    // fenceposts] We need to be careful about fenceposts here
+
+    leftBlock->size += currBlock->size + rightBlock->size;
+    // Update the block to the right of rightBlock: its left_size =
+    // leftBlock->size
+    header * rightOfRightBlock = get_right_header(rightBlock);
+    rightOfRightBlock->left_size = leftBlock->size;
+
+    // Unlink rightBlock from its free list.
+    rightBlock->prev->next = rightBlock->next;
+    rightBlock->next->prev = rightBlock->prev;
+
+    // It will be reinserted in step 7, so always unlink it first.
+    leftBlock->prev->next = leftBlock->next;
+    leftBlock->next->prev = leftBlock->prev;
+
+    // Set currBlock = leftBlock for reinsertion
+    currBlock = leftBlock;
+  }
+  // Case B — only right neighbor UNALLOCATED:
+  else if (leftBlock->allocated != UNALLOCATED &&
+           rightBlock->allocated == UNALLOCATED) {
+    currBlock->size += rightBlock->size;
+    // Inherit rightBlock's list links (splice currBlock in place of
+    // rightBlock so the list stays intact).
+    currBlock->next = rightBlock->next;
+    currBlock->prev = rightBlock->prev;
+    rightBlock->next->prev = currBlock;
+    rightBlock->prev->next = currBlock;
+    // Update the block to the right of rightBlock: its left_size =
+    // currBlock->size
+    header * rightOfRightBlock = get_right_header(rightBlock);
+    rightOfRightBlock->left_size = currBlock->size;
+    // It will be reinserted in step 7, so always unlink it first.
+    currBlock->prev->next = currBlock->next;
+    currBlock->next->prev = currBlock->prev;
+  }
+  // Case C — only left neighbor UNALLOCATED:
+  else if (leftBlock->allocated == UNALLOCATED &&
+           rightBlock->allocated != UNALLOCATED) {
+    leftBlock->size += currBlock->size;
+    // Update get_right_header(currBlock)->left_size = leftBlock->size
+    header * rightOfCurrBlock = get_right_header(currBlock);
+    rightOfCurrBlock->left_size = leftBlock->size;
+    // It will be reinserted in step 7, so always unlink it first.
+    leftBlock->prev->next = leftBlock->next;
+    leftBlock->next->prev = leftBlock->prev;
+    // Set currBlock = leftBlock for reinsertion
+    currBlock = leftBlock;
+  }
+  // Case D — neither neighbor UNALLOCATED:
+  // No merging needed; just fall through to step 7.
+
+  // 7. Compute the insertion index for currBlock:
+  //        insertionIndex = ((currBlock->size - ALLOC_HEADER_SIZE) / 8) - 1
+  //        Clamp to N_LISTS - 1.
+  int insertionIndex = ((currBlock->size - ALLOC_HEADER_SIZE) / 8) - 1;
+  if (insertionIndex < 0) {
+    insertionIndex = 0;
+  }
+  if (insertionIndex >= N_LISTS) {
+    insertionIndex = N_LISTS - 1;
+  }
+  // Insert currBlock at the front of freelistSentinels[insertionIndex].
+  header * targetFreelist = &freelistSentinels[insertionIndex];
+  currBlock->next = targetFreelist->next;
+  currBlock->prev = targetFreelist;
+  targetFreelist->next->prev = currBlock;
+  targetFreelist->next = currBlock;
 }
 
 /**
@@ -464,11 +785,11 @@ static inline bool verify_tags() {
   for (size_t i = 0; i < numOsChunks; i++) {
     header * invalid = verify_chunk(osChunkList[i]);
     if (invalid != NULL) {
-      return invalid;
+      return false;
     }
   }
 
-  return NULL;
+  return true;
 }
 
 /**

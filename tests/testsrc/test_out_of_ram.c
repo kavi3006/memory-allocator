@@ -1,7 +1,9 @@
 #include <sys/resource.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "testing.h"
-#include "malloc.h"
+#include "my_malloc.h"
 
 int main() {
   initialize_test(__FILE__);
